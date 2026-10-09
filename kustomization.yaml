@@ -1,0 +1,29 @@
+# @title Local cluster bundle
+# @notice `kubectl apply -k .` from the repo root creates the gateway
+#         Deployment, its Service, the NetworkPolicy, and a ConfigMap from
+#         config/gateway.yaml.
+# @dev This file sits at the repo root because kustomize refuses to read a
+#      file outside the directory that contains the kustomization. The
+#      allowlist lives in config/gateway.yaml, and that file has to be inside
+#      this tree. `disableNameSuffixHash` keeps the ConfigMap name stable so
+#      k8s/gateway.yaml can mount `omni-gateway-config` without a hash suffix.
+# @dev medical-mcp's Deployment is not in this bundle. Apply
+#      ../medical-mcp/k8s/medical-mcp.yaml first. That repo stays deployable
+#      without this gateway.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - k8s/gateway.yaml
+  - k8s/networkpolicy.yaml
+
+configMapGenerator:
+  - name: omni-gateway-config
+    files:
+      - gateway.yaml=config/gateway.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    app: omni-gateway

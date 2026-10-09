@@ -1,0 +1,42 @@
+# @title Medical ingress policy
+# @notice Once this object exists, the only Pods that may open a connection
+#         to medical-mcp:3000 are gateway Pods.
+# @dev A NetworkPolicy selects Pods by label. The moment any policy selects
+#      `app: medical-mcp`, that Pod's ingress is denied except the rules
+#      below. Egress is not set, so medical-mcp can still call FDA, PubMed,
+#      and the other public APIs. Do not add policyTypes: Egress here.
+#
+#      The allow rule names the gateway's Pod label, not the Service. Traffic
+#      from the Service still arrives with the gateway Pod as its source.
+#
+#      kubelet probes are not cluster Pods. On clusters that enforce policy
+#      (DigitalOcean's Cilium does), probes from the node keep working.
+#      Docker Desktop often does not enforce NetworkPolicy at all. Apply this
+#      file locally so the object is present; the hosting milestone is where
+#      "a random Pod cannot connect" is actually checked.
+#
+#      `kubectl port-forward` reaches the Pod through the API server, not
+#      through this policy. That is why an operator can still call medical-mcp
+#      directly to prove the backend works without the gateway. Callers on
+#      the public URL cannot do that.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: medical-mcp-from-gateway
+  labels:
+    app: omni-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: medical-mcp
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: omni-gateway
+      ports:
+        - protocol: TCP
+          port: 3000

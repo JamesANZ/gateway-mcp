@@ -1,0 +1,16 @@
+# @notice Files the image build must not see.
+# @dev node_modules and build are recreated inside the image so a laptop
+#      install cannot leak into the container. .env is excluded so a secret
+#      sitting next to the repo is not copied into a layer. k8s and scripts
+#      are operator files, not runtime files.
+
+node_modules
+build
+.git
+.env
+.env.*
+*.md
+k8s
+scripts
+src/**/*.test.ts
+.cursor

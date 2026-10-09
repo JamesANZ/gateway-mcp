@@ -1,0 +1,88 @@
+# @title Gateway configuration
+# @notice The single list of backends this process publishes, and the limits
+#         that apply to anonymous callers.
+# @dev This file is the source of truth for three runtimes:
+#      - `npm start` reads it from the working directory.
+#      - Docker Compose mounts this same file and sets MEDICAL_MCP_URL so the
+#        backend hostname is the Compose service, which has no published host port.
+#      - Kubernetes builds a ConfigMap from this file. MEDICAL_MCP_URL is left
+#        unset there, so the URL below (the cluster DNS name) is used.
+#      The gateway never reads API keys. NCBI, Monid, TinyFish, and TypeSafe
+#      keys belong on the medical-mcp Deployment, and the paid ones stay off
+#      the public-shaped deploy so a later allowlist mistake cannot spend them.
+
+# @notice How often this process re-reads tools/list from each backend.
+# @dev The result is cached in this process only. A second gateway replica has
+#      its own cache. Clients are not told when the list changes, because this
+#      server does not keep an MCP session to push a notification on.
+catalogRefreshMs: 30000
+
+limits:
+  # @notice Budget for one tools/call, including the backend's own upstream calls.
+  # @dev search-drugs fans out to several regulators, so this is longer than a
+  #      single HTTP call. tools/list uses a shorter timeout inside the catalog
+  #      code. A timeout becomes a JSON-RPC error, not a hung client.
+  requestTimeoutMs: 45000
+
+  # @notice Tool calls this process will run at the same time.
+  # @dev The ninth call waits nowhere: it is rejected. The counter is in memory,
+  #      so two replicas allow about sixteen. That is why the first public
+  #      deploy stays at one replica until a shared limiter exists.
+  maxInFlight: 8
+
+  rateLimit:
+    # @notice Sustained tools/call budget for one client address.
+    # @dev Token bucket: `burst` is the bucket size, `perMinute` is the refill.
+    #      A fresh address may make `burst` calls immediately, then one call
+    #      every (60 / perMinute) seconds. initialize and tools/list do not
+    #      spend tokens. The address is the TCP peer, not X-Forwarded-For.
+    perMinute: 30
+    burst: 10
+
+backends:
+  # @notice id becomes the tool-name prefix: medical__search-drugs.
+  # @dev Must match ^[a-z][a-z0-9-]{0,15}$. The public name is
+  #      "<id>__<backend tool>" and must stay within 64 characters.
+  - id: medical
+
+    # @notice Where this process POSTs JSON-RPC. Overridden when MEDICAL_MCP_URL is set.
+    # @dev The hostname is the Kubernetes Service, not a Pod IP. Pod IPs change
+    #      when a Deployment replaces a Pod. The Service name does not.
+    #      Short name `http://medical-mcp:3000/mcp` also works in the same
+    #      namespace; the full name below records which namespace that is.
+    url: http://medical-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: MEDICAL_MCP_URL
+
+    # @notice Tools copied into the gateway's tools/list. Everything else is denied.
+    # @dev Denial is independent of the backend. medical-mcp still registers
+    #      health-check and the paid tools; this list is what anonymous callers see.
+    #      Names here are the backend's names, without the medical__ prefix.
+    #
+    #      Included: public medical APIs that work with no API key.
+    #      search-medical-literature and search-pediatric-literature accept a
+    #      rerank argument, but that argument calls TypeSafe only when
+    #      TYPESAFE_API_KEY is mounted on medical-mcp. Leave that key off.
+    #      search-pediatric-guidelines uses PubMed unless MONID_API_KEY is set.
+    #      Leave that key off too.
+    #
+    #      Held back on purpose (do not add these until we decide):
+    #      - get-cache-stats: process internals, not a public data tool.
+    #      - health-check: pings every upstream and reports whether API keys exist.
+    #      - search-google-scholar: Monid / TinyFish when a key is set.
+    #      - rank-search-hits: one paid TypeSafe call per paper when a key is set.
+    #      - research-medical-topic: one call fans out across labels, FAERS,
+    #        PubMed, and trials, and can request web and social sources.
+    allow:
+      - search-drugs
+      - search-drug-safety
+      - search-drug-nomenclature
+      - search-clinical-trials
+      - search-clinical-guidelines
+      - search-medical-journals
+      - search-medical-literature
+      - get-article-details
+      - search-pediatric-literature
+      - search-pediatric-drugs
+      - search-pediatric-guidelines
+      - get-health-statistics
+      - list-sources

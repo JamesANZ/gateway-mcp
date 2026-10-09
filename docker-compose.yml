@@ -1,0 +1,77 @@
+# @title Local Docker stack
+# @notice Medical MCP and the gateway on one network, for the first milestone.
+# @dev medical-mcp has no `ports` key. The process listens inside the network
+#      and the host cannot open it. That is the local form of "backends are
+#      not publicly exposed". The gateway binds 127.0.0.1:8080 only, so another
+#      machine on the LAN cannot reach it either. Kubernetes is the next
+#      milestone; this file does not create a cluster.
+#      The gateway is published on 127.0.0.1:8090. Host port 8080 is already
+#      taken on this machine. The process inside the container still uses 8080.
+#
+#      MEDICAL_MCP_URL overrides the cluster DNS name in config/gateway.yaml.
+#      The hostname `medical-mcp` is this service's name on the Compose network.
+#      No API keys are passed in. Paid keys stay off so the held-back tools
+#      cannot spend money even if someone later adds them to the allowlist
+#      and forgets the keys are present.
+
+services:
+  medical-mcp:
+    image: medical-mcp:local
+    build:
+      context: ../medical-mcp
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    # No ports. Host access is not part of this service.
+    healthcheck:
+      # @notice /readyz does not call FDA or PubMed. It only says the process
+      #         is accepting. The gateway waits for this before it is itself ready.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  gateway:
+    image: omni-gateway:local
+    build: .
+    depends_on:
+      medical-mcp:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      GATEWAY_CONFIG: /app/config/gateway.yaml
+      # @notice Compose DNS name. Unset this and the file's cluster URL is used,
+      #         which does not resolve on a Docker network.
+      MEDICAL_MCP_URL: http://medical-mcp:3000/mcp
+    ports:
+      # @notice Loopback only. Host port 8090, container port 8080.
+      #         8080 on this machine is already published by another Compose
+      #         project (adminer). The container and the Kubernetes Service
+      #         stay on 8080. Only the laptop's host mapping moves.
+      - "127.0.0.1:8090:8080"
+    volumes:
+      # @notice The file in the repo is what the container reads, so an
+      #         allowlist edit does not require an image rebuild. Restart
+      #         the gateway after an edit. The catalog also refreshes every
+      #         30 seconds, but the allowlist is read only at process start.
+      - ./config/gateway.yaml:/app/config/gateway.yaml:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
