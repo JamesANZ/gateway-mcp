@@ -1,7 +1,7 @@
 # @title Gateway Deployment and Service
 # @notice One stateless replica of the gateway, reachable only inside the cluster.
 # @dev This file does not create an Ingress or a LoadBalancer. On a laptop,
-#      `kubectl port-forward svc/omni-gateway 8090:8080` is how a client on the
+#      `kubectl port-forward svc/gateway 8090:8080` is how a client on the
 #      host connects. 8090 is the host port because this laptop already
 #      publishes something else on 8080. The Service port stays 8080.
 #      That forward is the stand-in for the future public URL.
@@ -20,16 +20,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: omni-gateway
+  name: gateway
   labels:
-    app: omni-gateway
+    app: gateway
 spec:
   replicas: 1
   selector:
     # @notice Must match the Pod template labels. A typo here creates a
     #         Deployment whose Pods the Service will not select.
     matchLabels:
-      app: omni-gateway
+      app: gateway
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -42,21 +42,21 @@ spec:
     metadata:
       labels:
         # @notice The Service and the NetworkPolicy both select this label.
-        #         The policy's allow rule is `app: omni-gateway`, not the Service name.
-        app: omni-gateway
+        #         The policy's allow rule is `app: gateway`, not the Service name.
+        app: gateway
     spec:
       # @notice Kubernetes waits this long after SIGTERM before SIGKILL.
       #         The process exits on SIGTERM within about ten seconds.
       terminationGracePeriodSeconds: 15
       containers:
-        - name: omni-gateway
+        - name: gateway
           # @notice Local image from `docker compose build`. This Docker Desktop
           #         keeps Kubernetes images in a separate containerd
           #         (UseContainerdSnapshotter is off), so the kubelet cannot
           #         see a tag that only `docker build` knows. scripts/load-k8s-images.sh
           #         copies the tag into that store. A hosted cluster pulls
           #         from a registry instead; that milestone replaces this name.
-          image: omni-gateway:local
+          image: gateway:local
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -115,14 +115,14 @@ spec:
           configMap:
             # @notice Name produced by kustomization.yaml. The key gateway.yaml
             #         is the file name, mounted at /config/gateway.yaml.
-            name: omni-gateway-config
+            name: gateway-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: omni-gateway
+  name: gateway
   labels:
-    app: omni-gateway
+    app: gateway
 spec:
   # @notice ClusterIP is an address only Pods can use. It is not a host port
   #         and it is not a load balancer. Port-forward is a separate tunnel
@@ -130,7 +130,7 @@ spec:
   #         of this Service and still does not change medical-mcp to NodePort.
   type: ClusterIP
   selector:
-    app: omni-gateway
+    app: gateway
   ports:
     - name: http
       port: 8080

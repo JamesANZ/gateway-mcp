@@ -6,7 +6,7 @@
 #      file outside the directory that contains the kustomization. The
 #      allowlist lives in config/gateway.yaml, and that file has to be inside
 #      this tree. `disableNameSuffixHash` keeps the ConfigMap name stable so
-#      k8s/gateway.yaml can mount `omni-gateway-config` without a hash suffix.
+#      k8s/gateway.yaml can mount `gateway-config` without a hash suffix.
 # @dev medical-mcp's Deployment is not in this bundle. Apply
 #      ../medical-mcp/k8s/medical-mcp.yaml first. That repo stays deployable
 #      without this gateway.
@@ -19,11 +19,11 @@ resources:
   - k8s/networkpolicy.yaml
 
 configMapGenerator:
-  - name: omni-gateway-config
+  - name: gateway-config
     files:
       - gateway.yaml=config/gateway.yaml
 
 generatorOptions:
   disableNameSuffixHash: true
   labels:
-    app: omni-gateway
+    app: gateway

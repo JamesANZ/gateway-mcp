@@ -16,7 +16,7 @@
 export function log(event: Record<string, unknown>): void {
   const line = {
     ts: new Date().toISOString(),
-    service: "omni-gateway",
+    service: "gateway",
     ...event,
   };
   console.error(JSON.stringify(line));

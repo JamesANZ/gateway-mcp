@@ -217,7 +217,7 @@ test("the gateway publishes allowlisted tools and forwards one call", async () =
       },
     });
     assert.equal(initialized.status, 200);
-    assert.equal(initialized.body.result?.serverInfo?.name, "omni-mcp");
+    assert.equal(initialized.body.result?.serverInfo?.name, "gateway-mcp");
     assert.equal(initialized.headers.get("mcp-session-id"), null);
 
     const listed = await postMcp(gateway.url, {

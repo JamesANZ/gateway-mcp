@@ -1,4 +1,4 @@
-# Omni MCP gateway
+# Gateway MCP
 
 One Streamable HTTP endpoint that publishes an allowlist of tools from backend MCP servers. The first backend is medical-mcp. The gateway is the only process a client connects to. medical-mcp keeps its own Deployment and can still be called inside the cluster.
 
@@ -53,8 +53,8 @@ bash scripts/load-k8s-images.sh
 kubectl apply -f ../medical-mcp/k8s/medical-mcp.yaml
 kubectl apply -k .
 kubectl rollout status deployment/medical-mcp
-kubectl rollout status deployment/omni-gateway
-kubectl port-forward svc/omni-gateway 8090:8080
+kubectl rollout status deployment/gateway
+kubectl port-forward svc/gateway 8090:8080
 ```
 
 Leave the port-forward running and, in another terminal, `node scripts/verify-gateway.mjs`. Stop the Compose gateway first if it is still bound to 8090.

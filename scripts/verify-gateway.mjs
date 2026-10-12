@@ -67,7 +67,7 @@ if (get.status === 401 || get.status === 403) {
 }
 
 const transport = new StreamableHTTPClientTransport(new URL(endpoint));
-const client = new Client({ name: "omni-verify", version: "0.1.0" });
+const client = new Client({ name: "gateway-verify", version: "0.1.0" });
 await client.connect(transport);
 
 const listed = await client.listTools();

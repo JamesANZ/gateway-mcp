@@ -13,7 +13,7 @@ import test from "node:test";
 import { loadConfig } from "./config.js";
 
 function writeConfig(yaml: string): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "omni-config-"));
+  const dir = mkdtempSync(path.join(tmpdir(), "gateway-config-"));
   const file = path.join(dir, "gateway.yaml");
   writeFileSync(file, yaml);
   return file;

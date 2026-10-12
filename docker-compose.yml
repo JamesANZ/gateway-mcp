@@ -121,7 +121,7 @@ services:
     healthcheck: *backend-health
 
   gateway:
-    image: omni-gateway:local
+    image: gateway:local
     build: .
     depends_on:
       medical-mcp:

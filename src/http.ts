@@ -49,7 +49,7 @@ import type { GatewayConfig } from "./types.js";
  * @dev Clients show this name in their MCP settings. It is the gateway,
  *      not medical-mcp. The version tracks this repo's package.json.
  */
-const SERVER_INFO = { name: "omni-mcp", version: "0.1.0" };
+const SERVER_INFO = { name: "gateway-mcp", version: "0.1.0" };
 
 /**
  * @notice How long /readyz will wait for one backend probe.

@@ -25,7 +25,7 @@ kind: NetworkPolicy
 metadata:
   name: medical-mcp-from-gateway
   labels:
-    app: omni-gateway
+    app: gateway
 spec:
   podSelector:
     matchLabels:
@@ -36,7 +36,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app: omni-gateway
+              app: gateway
       ports:
         - protocol: TCP
           port: 3000
