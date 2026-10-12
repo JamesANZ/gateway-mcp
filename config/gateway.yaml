@@ -86,3 +86,149 @@ backends:
       - search-pediatric-guidelines
       - get-health-statistics
       - list-sources
+
+  # @notice Bitcoin chain data from mempool.space. No API key.
+  - id: bitcoin
+    url: http://bitcoin-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: BITCOIN_MCP_URL
+    allow:
+      - get-address-stats
+      - get-address-transactions
+      - get-address-utxos
+      - get-block
+      - get-transaction
+
+  # @notice Calls paid model APIs. Keys stay on this backend, not on the gateway.
+  #         A missing key makes that provider's tool return an error.
+  - id: cross-llm
+    url: http://cross-llm-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: CROSS_LLM_MCP_URL
+    allow:
+      - call-all-llms
+      - call-chatgpt
+      - call-claude
+      - call-deepseek
+      - call-gemini
+      - call-grok
+      - call-huggingface
+      - call-kimi
+      - call-llm
+      - call-mistral
+      - call-perplexity
+      - cancel-async-job
+      - clear-prompt-history
+      - delete-prompt-entries
+      - get-async-job-result
+      - get-model-registry-info
+      - get-models-by-tag
+      - get-prompt-history
+      - get-prompt-stats
+      - get-user-preferences
+      - list-async-jobs
+      - set-user-preferences
+      - submit-llm-request-async
+
+  # @notice Public EU legal sources. No API key.
+  - id: eu-legal
+    url: http://eu-legal-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: EU_LEGAL_MCP_URL
+    allow:
+      - search_eurlex
+      - search_cjeu_decisions
+      - search_ep_procedures
+      - search_all_legal
+      - get_recent_legislation
+      - get_recent_cjeu_decisions
+      - get_ep_committees
+
+  # @notice Ethereum JSON-RPC. INFURA_API_KEY belongs on this backend.
+  #         eth_sendRawTransaction broadcasts a transaction the caller already signed.
+  - id: evm
+    url: http://evm-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: EVM_MCP_URL
+    allow:
+      - encode_function_data
+      - eth_blockNumber
+      - eth_call
+      - eth_chainId
+      - eth_estimateGas
+      - eth_gasPrice
+      - eth_getBalance
+      - eth_getBlockByNumber
+      - eth_getCode
+      - eth_getLogs
+      - eth_getStorageAt
+      - eth_getTransactionByHash
+      - eth_getTransactionCount
+      - eth_getTransactionReceipt
+      - eth_sendRawTransaction
+      - list_known_addresses
+      - list_supported_networks
+      - net_listening
+      - net_peerCount
+      - net_version
+      - simulate_contract_call
+      - simulate_erc20_transfer
+      - simulate_native_transfer
+      - simulate_transaction
+      - web3_clientVersion
+      - web3_sha3
+
+  # @notice Polymarket, PredictIt, and Kalshi prices.
+  #         gather-market-movement-evidence needs the agent-reach CLI, which this image does not include.
+  - id: markets
+    url: http://prediction-markets-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: MARKETS_MCP_URL
+    allow:
+      - get-prediction-markets
+      - gather-market-movement-evidence
+
+  # @notice The system-prompt library baked into that image.
+  - id: prompts
+    url: http://system-prompts.default.svc.cluster.local:3000/mcp
+    urlEnv: PROMPTS_MCP_URL
+    allow:
+      - list_prompts
+      - get_prompt_suggestion
+
+  # @notice Video transcripts. Download uses yt-dlp. Transcription uses OpenAI when a key is set.
+  - id: transcript
+    url: http://transcript-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: TRANSCRIPT_MCP_URL
+    allow:
+      - get-transcript
+      - list-transcript-languages
+      - download-video
+      - list-downloads
+      - generate-subtitles
+      - transcribe-audio
+      - transcribe_upload_start
+      - transcribe_upload_append
+      - transcribe_upload_finalize
+      - transcribe_get_job
+      - transcribe_cancel_job
+
+  # @notice US bills, the Federal Register, and court opinions.
+  #         Congress.gov and GovInfo calls need the keys on this backend.
+  - id: us-legal
+    url: http://us-legal-mcp.default.svc.cluster.local:3000/mcp
+    urlEnv: US_LEGAL_MCP_URL
+    allow:
+      - search_congress_bills
+      - search_federal_register
+      - search_all_legal
+      - get_recent_bills
+      - get_recent_regulations
+      - search_court_opinions
+      - get_recent_court_opinions
+      - get_congress_committees
+      - get_genius_act_info
+      - get_clarity_act_info
+      - get_curated_act
+      - get_bill_details
+      - get_bill_actions
+      - get_bill_text
+      - get_public_law_text
+      - get_recent_regulator_news
+      - search_regulator_news
+      - search_digital_asset_regulation

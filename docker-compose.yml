@@ -1,18 +1,30 @@
 # @title Local Docker stack
-# @notice Medical MCP and the gateway on one network, for the first milestone.
-# @dev medical-mcp has no `ports` key. The process listens inside the network
-#      and the host cannot open it. That is the local form of "backends are
-#      not publicly exposed". The gateway binds 127.0.0.1:8080 only, so another
-#      machine on the LAN cannot reach it either. Kubernetes is the next
-#      milestone; this file does not create a cluster.
-#      The gateway is published on 127.0.0.1:8090. Host port 8080 is already
-#      taken on this machine. The process inside the container still uses 8080.
+# @notice Every MCP server in the sibling repos, plus the gateway, on one network.
+# @dev Backends have no `ports` key. The host cannot open them. The gateway is
+#      the only published process, on 127.0.0.1:8090. Inside the container the
+#      gateway still listens on 8080. Host port 8080 is already used by another
+#      project.
 #
-#      MEDICAL_MCP_URL overrides the cluster DNS name in config/gateway.yaml.
-#      The hostname `medical-mcp` is this service's name on the Compose network.
-#      No API keys are passed in. Paid keys stay off so the held-back tools
-#      cannot spend money even if someone later adds them to the allowlist
-#      and forgets the keys are present.
+#      Each *_MCP_URL overrides the cluster DNS name in config/gateway.yaml.
+#      API keys are not written in this file. Compose reads them from
+#      .env.backends, which is gitignored. Medical MCP still receives none:
+#      its paid tools stay off the allowlist, and a key mounted by habit
+#      would let a later allowlist edit spend it.
+
+x-backend-health: &backend-health
+  # @notice /readyz means the process has finished MCP initialize.
+  #         It does not call upstream APIs.
+  test:
+    [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+    ]
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 15s
 
 services:
   medical-mcp:
@@ -22,21 +34,91 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "3000"
-    # No ports. Host access is not part of this service.
-    healthcheck:
-      # @notice /readyz does not call FDA or PubMed. It only says the process
-      #         is accepting. The gateway waits for this before it is itself ready.
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
+    healthcheck: *backend-health
+
+  bitcoin-mcp:
+    image: bitcoin-mcp:local
+    build:
+      context: ../bitcoin-mcp
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
+
+  cross-llm-mcp:
+    image: cross-llm-mcp:local
+    build:
+      context: ../cross-llm-mcp
+    env_file:
+      - path: .env.backends
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
+
+  eu-legal-mcp:
+    image: eu-legal-mcp:local
+    build:
+      context: ../eu-legal-mcp
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
+
+  evm-mcp:
+    image: evm-mcp:local
+    build:
+      context: ../evm-mcp
+    env_file:
+      - path: .env.backends
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
+
+  prediction-markets-mcp:
+    image: prediction-markets-mcp:local
+    build:
+      context: ../prediction-markets-mcp
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
+
+  system-prompts:
+    image: system-prompts-mcp:local
+    build:
+      context: ../system-prompts-and-models-of-ai-tools
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
+
+  transcript-mcp:
+    image: transcript-mcp:local
+    build:
+      context: ../transcript-mcp
+    env_file:
+      - path: .env.backends
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
+
+  us-legal-mcp:
+    image: us-legal-mcp:local
+    build:
+      context: ../us-legal-mcp
+    env_file:
+      - path: .env.backends
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+    healthcheck: *backend-health
 
   gateway:
     image: omni-gateway:local
@@ -44,18 +126,37 @@ services:
     depends_on:
       medical-mcp:
         condition: service_healthy
+      bitcoin-mcp:
+        condition: service_healthy
+      cross-llm-mcp:
+        condition: service_healthy
+      eu-legal-mcp:
+        condition: service_healthy
+      evm-mcp:
+        condition: service_healthy
+      prediction-markets-mcp:
+        condition: service_healthy
+      system-prompts:
+        condition: service_healthy
+      transcript-mcp:
+        condition: service_healthy
+      us-legal-mcp:
+        condition: service_healthy
     environment:
       HOST: 0.0.0.0
       PORT: "8080"
       GATEWAY_CONFIG: /app/config/gateway.yaml
-      # @notice Compose DNS name. Unset this and the file's cluster URL is used,
-      #         which does not resolve on a Docker network.
       MEDICAL_MCP_URL: http://medical-mcp:3000/mcp
+      BITCOIN_MCP_URL: http://bitcoin-mcp:3000/mcp
+      CROSS_LLM_MCP_URL: http://cross-llm-mcp:3000/mcp
+      EU_LEGAL_MCP_URL: http://eu-legal-mcp:3000/mcp
+      EVM_MCP_URL: http://evm-mcp:3000/mcp
+      MARKETS_MCP_URL: http://prediction-markets-mcp:3000/mcp
+      PROMPTS_MCP_URL: http://system-prompts:3000/mcp
+      TRANSCRIPT_MCP_URL: http://transcript-mcp:3000/mcp
+      US_LEGAL_MCP_URL: http://us-legal-mcp:3000/mcp
     ports:
       # @notice Loopback only. Host port 8090, container port 8080.
-      #         8080 on this machine is already published by another Compose
-      #         project (adminer). The container and the Kubernetes Service
-      #         stay on 8080. Only the laptop's host mapping moves.
       - "127.0.0.1:8090:8080"
     volumes:
       # @notice The file in the repo is what the container reads, so an
@@ -73,5 +174,5 @@ services:
         ]
       interval: 5s
       timeout: 3s
-      retries: 10
-      start_period: 10s
+      retries: 12
+      start_period: 20s

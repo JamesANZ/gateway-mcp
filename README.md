@@ -26,7 +26,9 @@ From this directory, with Docker running:
 docker compose up --build
 ```
 
-Medical MCP has no host port. The gateway container listens on 8080. Compose publishes that as `127.0.0.1:8090`, because 8080 on this machine is already used by another project.
+None of the backend containers publish a host port. The gateway container listens on 8080. Compose publishes that as `127.0.0.1:8090`, because 8080 on this machine is already used by another project.
+
+The stack is Medical MCP plus the other servers in the sibling `mcp-servers` directories: Bitcoin, cross-LLM, EU legal, EVM, prediction markets, system prompts, transcripts, and US legal. Keys for the servers that need them are read from `.env.backends` in this directory. That file is gitignored. Medical MCP is not given those keys.
 
 ```bash
 node scripts/verify-gateway.mjs
