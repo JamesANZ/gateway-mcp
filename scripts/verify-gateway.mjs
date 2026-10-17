@@ -54,7 +54,7 @@ if (!live.ok) {
 }
 if (!readyResponse?.ok) {
   fail(
-    `/readyz did not return 200. The medical backend is probably not ready.`,
+    `/readyz did not return 200. The catalog is empty, so no backend has published tools yet.`,
   );
 }
 

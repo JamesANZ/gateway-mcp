@@ -10,6 +10,7 @@
  *      startHttpServer so they do not install signal handlers.
  */
 
+import { BackendHealth } from "./backend-health.js";
 import { FetchBackendClient } from "./backend-client.js";
 import { ToolCatalog } from "./catalog.js";
 import { loadConfig } from "./config.js";
@@ -19,10 +20,12 @@ import { log } from "./log.js";
 const configPath = process.env.GATEWAY_CONFIG ?? "config/gateway.yaml";
 const config = loadConfig(configPath);
 const client = new FetchBackendClient();
+const health = new BackendHealth();
 const catalog = new ToolCatalog(
   config.backends,
   config.catalogRefreshMs,
   client,
+  health,
 );
 
 /**
@@ -40,10 +43,12 @@ log({
 });
 
 await catalog.refresh();
-// @notice The first refresh often runs before medical-mcp is accepting.
+// @notice The first refresh often runs before any backend is accepting.
 //         Retry for about half a minute so the process that then listens
-//         already has tools. /readyz also stays 503 while the list is empty,
-//         so a Pod is not added to the Service during that wait.
+//         already has tools. /readyz stays 503 while the catalog is empty,
+//         so a Pod is not added to the Service during that wait. A later
+//         outage of one backend does not empty the catalog and does not
+//         fail /readyz.
 for (
   let attempt = 1;
   attempt < 30 && catalog.list().length === 0;
@@ -54,4 +59,7 @@ for (
 }
 catalog.start();
 
-await startHttpServer({ config, catalog, client }, { handleSignals: true });
+await startHttpServer(
+  { config, catalog, client, health },
+  { handleSignals: true },
+);

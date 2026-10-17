@@ -28,15 +28,32 @@ export class BackendError extends Error {
    * @param message Short text safe to log. Do not put secrets in it.
    * @param status HTTP status from the backend, if any.
    * @param timedOut Whether AbortSignal fired.
+   * @param transport True when the process did not answer: timeout,
+   *        connection failure, or HTTP 502, 503, or 504. A JSON-RPC tool
+   *        error and HTTP 401 or 403 leave this false. The circuit counts
+   *        only the true case.
    */
   constructor(
     message: string,
     readonly status?: number,
     readonly timedOut = false,
+    readonly transport = timedOut ||
+      status === 502 ||
+      status === 503 ||
+      status === 504,
   ) {
     super(message);
     this.name = "BackendError";
   }
+}
+
+/**
+ * @notice Whether this failure should count toward opening the circuit.
+ * @param error Whatever a backend call threw.
+ * @returns True only for a transport BackendError.
+ */
+export function isTransportFailure(error: unknown): boolean {
+  return error instanceof BackendError && error.transport;
 }
 
 /**
@@ -154,6 +171,7 @@ export async function postJsonRpc(
       timedOut ? "Backend timed out" : "Backend connection failed",
       undefined,
       timedOut,
+      true,
     );
   }
 

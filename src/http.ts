@@ -37,6 +37,7 @@ import express, {
   type Response,
 } from "express";
 import type { Server as HttpServer } from "node:http";
+import type { BackendHealth } from "./backend-health.js";
 import type { BackendClient } from "./backend-client.js";
 import type { ToolCatalog } from "./catalog.js";
 import { forwardToolCall } from "./forward.js";
@@ -53,10 +54,22 @@ const SERVER_INFO = { name: "gateway-mcp", version: "0.1.0" };
 
 /**
  * @notice How long /readyz will wait for one backend probe.
- * @dev The Kubernetes probe timeout is 2 seconds. This stays under that so
- *      a slow backend makes us NotReady instead of making the probe itself time out.
+ * @dev The Kubernetes probe timeout is 2 seconds. Probes run in parallel and
+ *      this stays under that so a slow backend is reported in the body instead
+ *      of making the probe itself time out. A down backend does not make this
+ *      process NotReady.
  */
 const READY_PROBE_MS = 1_500;
+
+/**
+ * @notice One backend's probe, as /readyz reports it.
+ * @param id Backend id from config.
+ * @param ready True when that process answered HTTP 200 within the budget.
+ */
+interface BackendProbe {
+  id: string;
+  ready: boolean;
+}
 
 /**
  * @notice Pieces the listener needs. Tests build them around a fake backend.
@@ -65,6 +78,7 @@ export interface GatewayRuntime {
   config: GatewayConfig;
   catalog: ToolCatalog;
   client: BackendClient;
+  health: BackendHealth;
 }
 
 /**
@@ -119,25 +133,28 @@ export async function startHttpServer(
   app.get("/readyz", async (_req, res) => {
     // @notice Readiness is "should new clients be sent here?".
     //         During shutdown the answer is no, even if the process is alive.
-    //         Otherwise every configured backend must answer /readyz. With one
-    //         backend that means medical-mcp is accepting. A failed check
-    //         removes this Pod from the Service. It does not restart it.
+    //         Otherwise the answer is yes when the catalog has tools. One
+    //         down backend is named in the body and does not remove this Pod
+    //         from the Service. An empty catalog does. Neither restarts the Pod.
     if (!accepting) {
       res.status(503).json({ status: "shutting-down" });
       return;
     }
-    // @notice An empty catalog means the last tools/list failed or has not
-    //         succeeded yet. Sending clients there would show zero tools.
-    //         Liveness stays ok so Kubernetes does not restart us for a
-    //         backend that is simply not up yet.
+    const backends = await probeBackends(runtime);
+    // @notice An empty catalog means tools/list has not succeeded yet.
+    //         Sending clients there would show zero tools. Liveness stays ok
+    //         so Kubernetes does not restart us for a backend that is simply
+    //         not up yet. A later outage keeps the last good tools and stays
+    //         200, with status "degraded" when a probe is failing.
     if (runtime.catalog.list().length === 0) {
-      res.status(503).json({ status: "catalog-empty" });
+      res.status(503).json({ status: "catalog-empty", backends });
       return;
     }
-    const ready = await backendsReady(runtime);
-    res
-      .status(ready ? 200 : 503)
-      .json({ status: ready ? "ready" : "backend-unavailable" });
+    const degraded = backends.some((backend) => !backend.ready);
+    res.status(200).json({
+      status: degraded ? "degraded" : "ready",
+      backends,
+    });
   });
 
   // @notice Standalone SSE stream. We do not offer one. 405 is the spec's answer.
@@ -280,6 +297,7 @@ function createGatewayServer(runtime: GatewayRuntime): Server {
     return forwardToolCall(
       runtime.catalog,
       runtime.client,
+      runtime.health,
       runtime.config.limits.requestTimeoutMs,
       request.params.name,
       args as Record<string, unknown>,
@@ -410,27 +428,47 @@ function requestId(body: unknown): number | string | null {
 }
 
 /**
- * @notice Ask every backend whether it is ready.
+ * @notice Ask every backend whether it is ready, and update the circuit.
  * @param runtime Config supplies the `/mcp` URLs. Readiness is `/readyz` on the same origin.
- * @returns True only when every backend answers 200.
- * @dev One unready backend fails the gateway probe. Publishing tools we cannot
- *      route would look like a successful connect followed by failing calls.
+ * @returns One row per configured backend, in config order.
+ * @dev The HTTP status of this process does not depend on these rows. A
+ *      changed ready bit is logged once. The next probe of the same value
+ *      is silent, so a 5-second kubelet period does not flood stderr.
  */
-async function backendsReady(runtime: GatewayRuntime): Promise<boolean> {
-  const checks = await Promise.all(
+async function probeBackends(runtime: GatewayRuntime): Promise<BackendProbe[]> {
+  return Promise.all(
     runtime.config.backends.map(async (backend) => {
-      const readyUrl = backend.url.replace(/\/mcp\/?$/, "/readyz");
-      try {
-        const response = await fetch(readyUrl, {
-          signal: AbortSignal.timeout(READY_PROBE_MS),
+      const ready = await probeBackend(backend.url);
+      const changed = runtime.health.recordProbe(backend.id, ready);
+      if (changed) {
+        log({
+          event: "backend_health",
+          backend: backend.id,
+          ready,
         });
-        return response.ok;
-      } catch {
-        return false;
       }
+      return { id: backend.id, ready };
     }),
   );
-  return checks.every(Boolean);
+}
+
+/**
+ * @notice GET one backend's /readyz.
+ * @param mcpUrl The backend's `/mcp` URL from config.
+ * @returns True when the response is HTTP 200 before the deadline.
+ * @dev A timeout or a connection error is "not ready". It is not thrown.
+ *      The circuit records that as a transport failure.
+ */
+async function probeBackend(mcpUrl: string): Promise<boolean> {
+  const readyUrl = mcpUrl.replace(/\/mcp\/?$/, "/readyz");
+  try {
+    const response = await fetch(readyUrl, {
+      signal: AbortSignal.timeout(READY_PROBE_MS),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

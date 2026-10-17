@@ -76,9 +76,10 @@ spec:
               mountPath: /config
               readOnly: true
           readinessProbe:
-            # @notice Not ready until medical-mcp's /readyz answers.
-            #         A failed probe removes this Pod from the Service.
-            #         It does not restart the Pod.
+            # @notice Ready when this process is up and the catalog has tools.
+            #         One down backend is "degraded" in the body and this Pod
+            #         stays in the Service. An empty catalog is 503, which
+            #         removes the Pod. It does not restart the Pod.
             httpGet:
               path: /readyz
               port: http

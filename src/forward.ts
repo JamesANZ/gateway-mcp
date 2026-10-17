@@ -7,7 +7,12 @@
  */
 
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
-import { BackendError, type BackendClient } from "./backend-client.js";
+import type { BackendHealth } from "./backend-health.js";
+import {
+  BackendError,
+  isTransportFailure,
+  type BackendClient,
+} from "./backend-client.js";
 import type { ToolCatalog } from "./catalog.js";
 import { log } from "./log.js";
 
@@ -27,18 +32,23 @@ export interface ToolResult {
  * @notice Route one public tool call.
  * @param catalog Current allowlisted snapshot.
  * @param client Backend HTTP client.
+ * @param health Circuit for this process. An open circuit skips fetch.
  * @param timeoutMs limits.requestTimeoutMs.
  * @param publicName Name the client called.
  * @param args Arguments object. Empty when the client omitted it.
  * @returns The backend's tool result.
  * @dev Unknown names, including hidden tools, throw InvalidParams with one
  *      sentence that does not say whether the backend has the tool.
+ *      An open circuit throws InternalError without calling the backend, so
+ *      the in-flight slot is held for milliseconds instead of the timeout.
  *      A timeout throws RequestTimeout. Anything else the backend failed at
  *      becomes InternalError. The message names the backend id, not the URL.
+ *      None of these are HTTP 401 or 403.
  */
 export async function forwardToolCall(
   catalog: ToolCatalog,
   client: BackendClient,
+  health: BackendHealth,
   timeoutMs: number,
   publicName: string,
   args: Record<string, unknown>,
@@ -58,6 +68,21 @@ export async function forwardToolCall(
     );
   }
 
+  if (health.rejectCall(route.backend.id)) {
+    log({
+      event: "tool_call",
+      tool: publicName,
+      backend: route.backend.id,
+      backendTool: route.toolName,
+      status: "unavailable",
+      latencyMs: Date.now() - started,
+    });
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Backend ${route.backend.id} is unavailable`,
+    );
+  }
+
   try {
     const result = await client.callTool(
       route.backend.url,
@@ -65,6 +90,8 @@ export async function forwardToolCall(
       args,
       timeoutMs,
     );
+    const toolResult = asToolResult(result);
+    health.recordSuccess(route.backend.id);
     log({
       event: "tool_call",
       tool: publicName,
@@ -73,8 +100,13 @@ export async function forwardToolCall(
       status: "ok",
       latencyMs: Date.now() - started,
     });
-    return asToolResult(result);
+    return toolResult;
   } catch (error) {
+    if (isTransportFailure(error)) {
+      health.recordTransportFailure(route.backend.id);
+    } else {
+      health.recordApplicationFailure(route.backend.id);
+    }
     const timedOut = error instanceof BackendError && error.timedOut;
     log({
       event: "tool_call",

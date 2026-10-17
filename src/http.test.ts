@@ -10,10 +10,27 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import test from "node:test";
+import { BackendHealth } from "./backend-health.js";
 import { FetchBackendClient } from "./backend-client.js";
 import { ToolCatalog } from "./catalog.js";
 import { startHttpServer } from "./http.js";
 import type { GatewayConfig } from "./types.js";
+
+/**
+ * @notice Knobs a fake backend reads on each request.
+ * @param readyStatus HTTP status for /readyz.
+ * @param listStatus HTTP status for tools/list. 200 sends the normal catalog.
+ * @param hangCalls When true, tools/call accepts the body and never replies.
+ * @dev The test mutates this object after catalog refresh so a backend can
+ *      publish tools and then hang.
+ */
+interface BackendBehavior {
+  readyStatus: number;
+  listStatus: number;
+  hangCalls: boolean;
+  calls: number;
+  lastCall: string | undefined;
+}
 
 interface JsonRpc {
   jsonrpc?: string;
@@ -32,16 +49,34 @@ interface JsonRpc {
  * @dev /readyz is what the gateway probes. tools/list includes a hidden tool
  *      so the test can prove the allowlist removed it.
  */
-async function startBackend(): Promise<{
+function backendBehavior(
+  overrides: Partial<BackendBehavior> = {},
+): BackendBehavior {
+  return {
+    readyStatus: 200,
+    listStatus: 200,
+    hangCalls: false,
+    calls: 0,
+    lastCall: undefined,
+    ...overrides,
+  };
+}
+
+async function startBackend(
+  behavior: BackendBehavior = backendBehavior(),
+): Promise<{
   url: string;
   lastCall: () => string | undefined;
+  calls: () => number;
   close: () => Promise<void>;
 }> {
-  let lastCall: string | undefined;
   const server = createServer((req, res) => {
     if (req.url === "/readyz" || req.url === "/healthz") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok" }));
+      const ready = behavior.readyStatus === 200;
+      res.writeHead(behavior.readyStatus, {
+        "Content-Type": "application/json",
+      });
+      res.end(JSON.stringify({ status: ready ? "ok" : "down" }));
       return;
     }
     const chunks: Buffer[] = [];
@@ -52,6 +87,11 @@ async function startBackend(): Promise<{
         params?: { name?: string };
       };
       if (body.method === "tools/list") {
+        if (behavior.listStatus !== 200) {
+          res.writeHead(behavior.listStatus);
+          res.end();
+          return;
+        }
         sse(res, {
           jsonrpc: "2.0",
           id: 1,
@@ -73,7 +113,11 @@ async function startBackend(): Promise<{
         return;
       }
       if (body.method === "tools/call") {
-        lastCall = body.params?.name;
+        behavior.calls += 1;
+        behavior.lastCall = body.params?.name;
+        if (behavior.hangCalls) {
+          return;
+        }
         sse(res, {
           jsonrpc: "2.0",
           id: 1,
@@ -95,7 +139,8 @@ async function startBackend(): Promise<{
   }
   return {
     url: `http://127.0.0.1:${address.port}/mcp`,
-    lastCall: () => lastCall,
+    lastCall: () => behavior.lastCall,
+    calls: () => behavior.calls,
     close: () => close(server),
   };
 }
@@ -184,14 +229,16 @@ test("the gateway publishes allowlisted tools and forwards one call", async () =
     ],
   };
   const client = new FetchBackendClient();
+  const health = new BackendHealth();
   const catalog = new ToolCatalog(
     config.backends,
     config.catalogRefreshMs,
     client,
+    health,
   );
   await catalog.refresh();
   const gateway = await startHttpServer(
-    { config, catalog, client },
+    { config, catalog, client, health },
     { host: "127.0.0.1", port: 0 },
   );
 
@@ -200,6 +247,12 @@ test("the gateway publishes allowlisted tools and forwards one call", async () =
     const ready = await fetch(gateway.url.replace(/\/mcp$/, "/readyz"));
     assert.equal(live.status, 200);
     assert.equal(ready.status, 200);
+    const readyBody = (await ready.json()) as {
+      status: string;
+      backends: Array<{ id: string; ready: boolean }>;
+    };
+    assert.equal(readyBody.status, "ready");
+    assert.deepEqual(readyBody.backends, [{ id: "medical", ready: true }]);
 
     const get = await fetch(gateway.url);
     assert.equal(get.status, 405);
@@ -276,14 +329,16 @@ test("a tool call past the configured burst is rejected with 429", async () => {
     ],
   };
   const client = new FetchBackendClient();
+  const health = new BackendHealth();
   const catalog = new ToolCatalog(
     config.backends,
     config.catalogRefreshMs,
     client,
+    health,
   );
   await catalog.refresh();
   const gateway = await startHttpServer(
-    { config, catalog, client },
+    { config, catalog, client, health },
     { host: "127.0.0.1", port: 0 },
   );
 
@@ -322,13 +377,15 @@ test("a body that is not JSON is 400, not an authentication error", async () => 
     backends: [{ id: "medical", url: backend.url, allow: ["list-sources"] }],
   };
   const client = new FetchBackendClient();
+  const health = new BackendHealth();
   const catalog = new ToolCatalog(
     config.backends,
     config.catalogRefreshMs,
     client,
+    health,
   );
   const gateway = await startHttpServer(
-    { config, catalog, client },
+    { config, catalog, client, health },
     { host: "127.0.0.1", port: 0 },
   );
   try {
@@ -343,5 +400,131 @@ test("a body that is not JSON is 400, not an authentication error", async () => 
   } finally {
     await gateway.close();
     await backend.close();
+  }
+});
+
+test("one down backend leaves the gateway ready and names that backend", async () => {
+  const medical = await startBackend();
+  const bitcoinBehavior = backendBehavior({
+    readyStatus: 500,
+    listStatus: 500,
+  });
+  const bitcoin = await startBackend(bitcoinBehavior);
+  const config: GatewayConfig = {
+    catalogRefreshMs: 60_000,
+    limits: {
+      requestTimeoutMs: 5_000,
+      maxInFlight: 8,
+      perMinute: 30,
+      burst: 10,
+    },
+    backends: [
+      { id: "medical", url: medical.url, allow: ["list-sources"] },
+      { id: "bitcoin", url: bitcoin.url, allow: ["list-sources"] },
+    ],
+  };
+  const client = new FetchBackendClient();
+  const health = new BackendHealth();
+  const catalog = new ToolCatalog(
+    config.backends,
+    config.catalogRefreshMs,
+    client,
+    health,
+  );
+  await catalog.refresh();
+  const gateway = await startHttpServer(
+    { config, catalog, client, health },
+    { host: "127.0.0.1", port: 0 },
+  );
+
+  try {
+    const ready = await fetch(gateway.url.replace(/\/mcp$/, "/readyz"));
+    const body = (await ready.json()) as {
+      status: string;
+      backends: Array<{ id: string; ready: boolean }>;
+    };
+    assert.equal(ready.status, 200);
+    assert.equal(body.status, "degraded");
+    assert.deepEqual(body.backends, [
+      { id: "medical", ready: true },
+      { id: "bitcoin", ready: false },
+    ]);
+
+    const listed = await postMcp(gateway.url, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+      params: {},
+    });
+    const names = listed.body.result?.tools?.map((tool) => tool.name) ?? [];
+    assert.deepEqual(names, ["medical__list-sources"]);
+  } finally {
+    await gateway.close();
+    await medical.close();
+    await bitcoin.close();
+  }
+});
+
+test("an open circuit fails the call without contacting the backend", async () => {
+  const behavior = backendBehavior();
+  const bitcoin = await startBackend(behavior);
+  const config: GatewayConfig = {
+    catalogRefreshMs: 60_000,
+    limits: {
+      requestTimeoutMs: 5_000,
+      maxInFlight: 8,
+      perMinute: 30,
+      burst: 10,
+    },
+    backends: [{ id: "bitcoin", url: bitcoin.url, allow: ["list-sources"] }],
+  };
+  const client = new FetchBackendClient();
+  const health = new BackendHealth();
+  const catalog = new ToolCatalog(
+    config.backends,
+    config.catalogRefreshMs,
+    client,
+    health,
+  );
+  await catalog.refresh();
+  behavior.hangCalls = true;
+  health.recordTransportFailure("bitcoin");
+  health.recordTransportFailure("bitcoin");
+  const gateway = await startHttpServer(
+    { config, catalog, client, health },
+    { host: "127.0.0.1", port: 0 },
+  );
+
+  try {
+    const started = Date.now();
+    const called = await postMcp(gateway.url, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "bitcoin__list-sources", arguments: {} },
+    });
+    assert.ok(Date.now() - started < 1_000);
+    assert.equal(called.status, 200);
+    assert.equal(called.body.error?.code, -32603);
+    // @notice The SDK prefixes the McpError text. The sentence is ours.
+    assert.match(
+      called.body.error?.message ?? "",
+      /Backend bitcoin is unavailable/,
+    );
+    assert.notEqual(called.status, 401);
+    assert.notEqual(called.status, 403);
+    assert.equal(bitcoin.calls(), 0);
+
+    const listed = await postMcp(gateway.url, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {},
+    });
+    const names = listed.body.result?.tools?.map((tool) => tool.name) ?? [];
+    assert.deepEqual(names, ["bitcoin__list-sources"]);
+  } finally {
+    await gateway.close();
+    await bitcoin.close();
   }
 });

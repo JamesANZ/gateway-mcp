@@ -9,10 +9,16 @@
  *
  *      The snapshot is per process. Replicas do not share it. That is safe
  *      because the snapshot is a cache of the backend, not session state.
+ *      An open circuit does not remove those tools. Clients cache tools/list,
+ *      and the tools are callable again as soon as the circuit closes.
  */
 
 import { publishTools } from "./allowlist.js";
-import type { BackendClient } from "./backend-client.js";
+import type { BackendHealth } from "./backend-health.js";
+import {
+  isTransportFailure,
+  type BackendClient,
+} from "./backend-client.js";
 import { log } from "./log.js";
 import type { BackendConfig, PublicTool } from "./types.js";
 
@@ -47,11 +53,16 @@ export class ToolCatalog {
    * @param backends Configured backends, already environment-overridden.
    * @param refreshMs Delay between tools/list polls.
    * @param client HTTP client. Tests pass a fake.
+   * @param health Circuit shared with the forwarder. A list that cannot
+   *        connect counts as a transport failure. A successful list does
+   *        not close the circuit; a probe or a tool call does. The previous
+   *        tools stay published either way.
    */
   constructor(
     private readonly backends: BackendConfig[],
     private readonly refreshMs: number,
     private readonly client: BackendClient,
+    private readonly health: BackendHealth,
   ) {}
 
   /**
@@ -134,6 +145,9 @@ export class ToolCatalog {
             (tool) => tool.backendId === backend.id,
           );
           next.push(...kept);
+          if (isTransportFailure(error)) {
+            this.health.recordTransportFailure(backend.id);
+          }
           log({
             event: "catalog_refresh_failed",
             backend: backend.id,
